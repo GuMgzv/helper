@@ -1,0 +1,274 @@
+# app.py — веб-версия игры «Угадай число» на Python (Flask)
+#
+# Как это работает:
+#   - Python (сервер) загадывает число и решает: больше / меньше / угадала.
+#   - Страница в браузере показывает лягушку и отправляет догадки серверу.
+#
+# Запуск:  py app.py   (затем открыть http://localhost:5000)
+
+from flask import Flask, request, jsonify
+import random
+
+app = Flask(__name__)
+
+# Состояние игры живёт на сервере
+secret = random.randint(1, 100)   # загаданное число
+attempts = 0                      # счётчик попыток
+
+
+# --- страница с лягушкой ---
+PAGE = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Угадай число (Python)</title>
+<style>
+  :root{
+    --ink:#1d2433; --paper:#f3f7ee; --card:#ffffff;
+    --coral:#ff6b5e; --coral-soft:#ffe7e3;
+    --mint:#2bb673; --mint-soft:#e2f6ec;
+    --sky:#3a7bd5; --sky-soft:#e6effb;
+    --muted:#8b93a4; --line:#e6e9df;
+    --frog:#5bbf57; --frog-dark:#3f9e3c;
+    --tongue:#ff7a93; --tongue-dark:#e85d78;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--paper);color:var(--ink);min-height:100vh;
+    display:flex;align-items:center;justify-content:center;padding:24px}
+  .card{width:100%;max-width:460px;background:var(--card);
+    border:1px solid var(--line);border-radius:24px;padding:32px 28px;
+    box-shadow:0 18px 40px -24px rgba(29,36,51,.4)}
+  .eyebrow{font-size:13px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--muted);font-weight:600}
+  h1{font-size:30px;line-height:1.15;margin:6px 0 4px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:15px;margin-bottom:18px}
+
+  .pond{position:relative;height:108px;margin-bottom:18px}
+  .frog{position:absolute;left:0;bottom:0;width:74px;height:74px;z-index:3;
+    transition:transform .25s ease}
+  .frog.happy{animation:hop .5s ease}
+  @keyframes hop{0%,100%{transform:translateY(0)}
+    30%{transform:translateY(-14px) scale(1.05)}60%{transform:translateY(0) scale(.98)}}
+  .eye-lid{transform-origin:center;animation:blink 4.5s infinite}
+  @keyframes blink{0%,93%,100%{transform:scaleY(0)}96%{transform:scaleY(1)}}
+
+  .track{position:absolute;left:62px;right:6px;bottom:22px;height:14px}
+  .rail{position:absolute;inset:0;border-radius:999px;background:var(--line)}
+  .tongue{position:absolute;top:50%;left:0;height:11px;transform:translateY(-50%);
+    background:var(--tongue);border-radius:0 999px 999px 0;
+    transition:width .4s cubic-bezier(.34,1.3,.64,1);
+    box-shadow:inset 0 -2px 0 rgba(0,0,0,.06)}
+  .zone{position:absolute;top:50%;height:18px;transform:translateY(-50%);
+    background:linear-gradient(90deg,var(--tongue),var(--tongue-dark));
+    border-radius:999px;
+    transition:left .4s cubic-bezier(.34,1.3,.64,1),width .4s cubic-bezier(.34,1.3,.64,1);
+    box-shadow:0 4px 10px -4px var(--tongue-dark)}
+  .tip{position:absolute;top:50%;width:18px;height:18px;
+    transform:translate(-50%,-50%);background:var(--tongue-dark);border-radius:50%;
+    transition:left .4s cubic-bezier(.34,1.3,.64,1);
+    box-shadow:0 4px 10px -4px var(--tongue-dark)}
+  .tip.caught{animation:wiggle .45s ease}
+  @keyframes wiggle{0%,100%{transform:translate(-50%,-50%) scale(1)}
+    40%{transform:translate(-50%,-50%) scale(1.5)}}
+  .ends{position:absolute;left:62px;right:6px;bottom:8px;
+    display:flex;justify-content:space-between;
+    font-size:12px;color:var(--muted);font-weight:600}
+
+  .input-row{display:flex;gap:10px;margin-bottom:14px}
+  input{flex:1;min-width:0;font-size:22px;font-weight:600;text-align:center;
+    padding:14px;border:2px solid var(--line);border-radius:14px;
+    color:var(--ink);background:var(--paper);transition:border-color .2s}
+  input:focus{outline:none;border-color:var(--frog-dark)}
+  button{font-family:inherit;font-size:16px;font-weight:600;border:none;
+    border-radius:14px;cursor:pointer;padding:0 22px;background:var(--ink);
+    color:#fff;transition:transform .08s,opacity .2s}
+  button:hover{opacity:.9}
+  button:active{transform:translateY(1px)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+
+  .msg{min-height:52px;display:flex;align-items:center;gap:10px;
+    font-size:17px;font-weight:600;padding:14px 16px;border-radius:14px;
+    margin-bottom:18px;background:var(--paper);color:var(--muted);
+    transition:background .2s,color .2s}
+  .msg .arrow{font-size:22px;line-height:1}
+  .msg.high{background:var(--sky-soft);color:var(--sky)}
+  .msg.low{background:var(--coral-soft);color:var(--coral)}
+  .msg.win{background:var(--mint-soft);color:var(--mint)}
+  .msg.err{background:var(--coral-soft);color:var(--coral)}
+
+  .foot{display:flex;align-items:center;justify-content:space-between;
+    font-size:14px;color:var(--muted)}
+  .count strong{color:var(--ink);font-size:18px}
+  .ghost{background:transparent;color:var(--ink);
+    border:2px solid var(--line);padding:10px 16px;font-size:14px}
+  .ghost:hover{border-color:var(--ink);opacity:1}
+
+  .history{display:flex;flex-wrap:wrap;gap:6px;margin-top:18px}
+  .chip{font-size:13px;font-weight:600;padding:4px 10px;border-radius:999px;
+    background:var(--paper);border:1px solid var(--line);color:var(--muted)}
+
+  @media (prefers-reduced-motion: reduce){*{animation:none !important;transition:none !important}}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="eyebrow">Игра · Python</div>
+    <h1>Угадай число</h1>
+    <p class="sub">Число загадывает сервер на Python. Язык лягушки тянется туда, где оно ещё может быть.</p>
+
+    <div class="pond">
+      <svg class="frog" id="frog" viewBox="0 0 100 100">
+        <ellipse cx="50" cy="62" rx="40" ry="34" fill="var(--frog)"/>
+        <ellipse cx="50" cy="74" rx="30" ry="18" fill="var(--frog-dark)" opacity=".25"/>
+        <circle cx="30" cy="28" r="16" fill="var(--frog)"/>
+        <circle cx="70" cy="28" r="16" fill="var(--frog)"/>
+        <circle cx="30" cy="28" r="9" fill="#fff"/>
+        <circle cx="70" cy="28" r="9" fill="#fff"/>
+        <circle cx="32" cy="29" r="5" fill="#1d2433"/>
+        <circle cx="72" cy="29" r="5" fill="#1d2433"/>
+        <rect class="eye-lid" x="21" y="20" width="18" height="9" rx="4" fill="var(--frog)"/>
+        <rect class="eye-lid" x="61" y="20" width="18" height="9" rx="4" fill="var(--frog)"/>
+        <path d="M30 66 Q50 80 70 66" stroke="var(--frog-dark)" stroke-width="4" fill="none" stroke-linecap="round"/>
+      </svg>
+      <div class="track">
+        <div class="rail"></div>
+        <div class="tongue" id="tongue"></div>
+        <div class="zone" id="zone"></div>
+        <div class="tip" id="tip"></div>
+      </div>
+      <div class="ends"><span id="lo">1</span><span id="hi">100</span></div>
+    </div>
+
+    <div class="input-row">
+      <input id="guess" type="number" min="1" max="100" placeholder="1–100" autofocus>
+      <button id="check">Проверить</button>
+    </div>
+
+    <div class="msg" id="msg">Введи число и нажми «Проверить»</div>
+
+    <div class="foot">
+      <span class="count">Попыток: <strong id="count">0</strong></span>
+      <button class="ghost" id="restart">Новая игра</button>
+    </div>
+
+    <div class="history" id="history"></div>
+  </div>
+
+<script>
+  let lo, hi, finished;
+  const $ = id => document.getElementById(id);
+  const input = $("guess");
+  const pct = v => (v - 1) / 99 * 100;
+
+  async function newGame(){
+    await fetch("/new");           // просим сервер загадать новое число
+    lo = 1; hi = 100; finished = false;
+    $("count").textContent = 0;
+    $("history").innerHTML = "";
+    setMsg("Введи число и нажми «Проверить»", "");
+    $("tip").classList.remove("caught");
+    $("frog").classList.remove("happy");
+    updateTongue();
+    $("check").disabled = false;
+    input.value = ""; input.disabled = false; input.focus();
+  }
+
+  function setMsg(text, cls, arrow){
+    const m = $("msg");
+    m.className = "msg" + (cls ? " " + cls : "");
+    m.innerHTML = (arrow ? '<span class="arrow">'+arrow+'</span>' : '') + text;
+  }
+
+  function updateTongue(){
+    $("lo").textContent = lo;
+    $("hi").textContent = hi;
+    $("tongue").style.width = pct(hi) + "%";
+    $("zone").style.left = pct(lo) + "%";
+    $("zone").style.width = (pct(hi) - pct(lo)) + "%";
+    $("tip").style.left = pct(hi) + "%";
+  }
+
+  function addChip(n, dir){
+    const c = document.createElement("span");
+    c.className = "chip"; c.textContent = n + " " + dir;
+    $("history").appendChild(c);
+  }
+
+  async function check(){
+    if(finished) return;
+    const val = parseInt(input.value, 10);
+    if(isNaN(val) || val < 1 || val > 100){
+      setMsg("Нужно число от 1 до 100", "err");
+      input.focus(); input.select();
+      return;
+    }
+    // спрашиваем сервер: больше / меньше / угадала
+    const res = await fetch("/guess?n=" + val);
+    const data = await res.json();
+    $("count").textContent = data.attempts;
+
+    if(data.result === "higher"){
+      if(val + 1 > lo) lo = val + 1;
+      setMsg("Загаданное число больше", "high", "↑");
+      addChip(val, "↑"); updateTongue();
+    } else if(data.result === "lower"){
+      if(val - 1 < hi) hi = val - 1;
+      setMsg("Загаданное число меньше", "low", "↓");
+      addChip(val, "↓"); updateTongue();
+    } else {
+      finished = true;
+      lo = hi = val; updateTongue();
+      setMsg("Поймала за " + data.attempts + "! 🎉", "win", "✓");
+      addChip(val, "✓");
+      $("tip").classList.add("caught");
+      $("frog").classList.add("happy");
+      $("check").disabled = true; input.disabled = true;
+    }
+    input.value = ""; input.focus();
+  }
+
+  $("check").addEventListener("click", check);
+  input.addEventListener("keydown", e => { if(e.key === "Enter") check(); });
+  $("restart").addEventListener("click", newGame);
+
+  newGame();
+</script>
+</body>
+</html>"""
+
+
+@app.route("/")
+def index():
+    # отдаём браузеру страницу с лягушкой
+    return PAGE
+
+
+@app.route("/new")
+def new_game():
+    # загадываем новое число и обнуляем счётчик
+    global secret, attempts
+    secret = random.randint(1, 100)
+    attempts = 0
+    return jsonify(ok=True)
+
+
+@app.route("/guess")
+def guess():
+    # сравниваем догадку игрока с загаданным числом
+    global attempts
+    n = int(request.args.get("n"))
+    attempts += 1
+    if n < secret:
+        result = "higher"   # загаданное больше
+    elif n > secret:
+        result = "lower"    # загаданное меньше
+    else:
+        result = "win"      # угадала
+    return jsonify(result=result, attempts=attempts)
+
+
+if __name__ == "__main__":
+    # запускаем сервер на http://localhost:5000
+    app.run(debug=True, port=5000)
